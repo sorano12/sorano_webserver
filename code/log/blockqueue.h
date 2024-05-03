@@ -43,6 +43,11 @@ BlockQueue<T>::BlockQueue(size_t maxsize):capacity_(maxsize){
 }
 
 template<typename T>
+BlockQueue<T>::~BlockQueue() {
+    Close();
+}
+
+template<typename T>
 void BlockQueue<T>::Close(){
     //lock_guard<mutex> locker(mtx_);
     clear();

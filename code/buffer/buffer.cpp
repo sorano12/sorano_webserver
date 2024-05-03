@@ -129,6 +129,14 @@ ssize_t Buffer::WriteFd(int fd,int* Errno){
     return len;
 }
 
+char* Buffer::BeginPtr_() {
+    return &buffer_[0];
+}
+
+const char* Buffer::BeginPtr_() const{
+    return &buffer_[0];
+}
+
 //扩容
 void Buffer::MakeSpace_(size_t len){
     if(WritableBytes()+PrependableBytes()<len){
