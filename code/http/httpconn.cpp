@@ -11,6 +11,10 @@ HttpConn::HttpConn(){
     isClose_=true;
 }
 
+HttpConn::~HttpConn() { 
+    Close(); 
+};
+
 void HttpConn::init(int fd,const sockaddr_in& addr){
     assert(fd>0);
     userCount++;
@@ -86,25 +90,29 @@ ssize_t HttpConn::write(int* saveErrno){
     return len;
 }
 
-bool HttpConn::process(){
+bool HttpConn::process() {
     request_.Init();
-    if(readBuff_.ReadableBytes()<=0){
+    if(readBuff_.ReadableBytes() <= 0) {
         return false;
     }
-    else if(request_.parse(readBuff_)){
-        LOG_DEBUG("%s",request_.path().c_str());
-        response_.Init(srcDir,request_.path(),request_.IsKeepAlive(),200);
-
+    else if(request_.parse(readBuff_)) {    // 解析成功
+        LOG_DEBUG("%s", request_.path().c_str());
+        response_.Init(srcDir, request_.path(), request_.IsKeepAlive(), 200);
+    } else {
+        response_.Init(srcDir, request_.path(), false, 400);
     }
-    else{
-        response_.Init(srcDir,request_.path(),false,400);
-    }
-    response_.MakeResponse(writeBuff_);
 
-    if(response_.FileLen()>0&&response_.File()){
-        iov_[1].iov_base=response_.File();
-        iov_[1].iov_len=response_.FileLen();
-        iovCnt_=2;
+    response_.MakeResponse(writeBuff_); // 生成响应报文放入writeBuff_中
+    // 响应头
+    iov_[0].iov_base = const_cast<char*>(writeBuff_.Peek());
+    iov_[0].iov_len = writeBuff_.ReadableBytes();
+    iovCnt_ = 1;
+
+    // 文件
+    if(response_.FileLen() > 0  && response_.File()) {
+        iov_[1].iov_base = response_.File();
+        iov_[1].iov_len = response_.FileLen();
+        iovCnt_ = 2;
     }
     LOG_DEBUG("filesize:%d, %d  to %d", response_.FileLen() , iovCnt_, ToWriteBytes());
     return true;

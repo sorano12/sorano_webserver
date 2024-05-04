@@ -9,7 +9,7 @@ SqlConnPool* SqlConnPool::Instance(){
 //初始化
 void SqlConnPool::Init(const char* host,int port,
                        const char* user,const char* pwd,
-                       const char* DbNmae,int connSize=10){
+                       const char* DbName,int connSize=10){
     assert(connSize>0);
     for(int i=0;i<connSize;++i){
         MYSQL* conn=nullptr;
@@ -18,7 +18,7 @@ void SqlConnPool::Init(const char* host,int port,
             LOG_ERROR("MySql init error!");
             assert(conn);
         }
-        conn=mysql_real_connect(conn,host,user,pwd,DbNmae,port,nullptr,0);
+        conn=mysql_real_connect(conn,host,user,pwd,DbName,port,nullptr,0);
         if(!conn){
             LOG_ERROR("MySql Connect error!");
         }
