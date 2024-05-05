@@ -1,6 +1,6 @@
 # sorano_webserver modern-c风格、轻量级、高性能、高并发的Web服务器
 ## Introduction
-C++实现的基于linux的轻量级服务器，webbench压测可达到上万QPS
+C++实现的基于linux的轻量级服务器，webbench压测可支持上万并发量
 
 ## Function
 * 利用IO复用技术Epoll与线程池实现多线程的Reactor高并发模型；
