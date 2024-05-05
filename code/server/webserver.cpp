@@ -147,7 +147,7 @@ void WebServer::DealListen_(){
 void WebServer::DealRead_(HttpConn* client){
     assert(client);
     ExtentTime_(client);
-    threadpool_->AddTask(std::bind(&WebServer::OnRead_,this,client));//这是一个右值，bind将参数和函数绑定成一个函数对象
+    threadpool_->AddTask(std::bind(&WebServer::OnRead_,this,client));//bind将参数和函数绑定成一个函数对象
 }
 
 //处理写事件，主要逻辑是将onwrite加入线程池的任务队列

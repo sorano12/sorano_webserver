@@ -1,0 +1,88 @@
+主要记录一下遇到的几个低级错误bug，再从数据流的处理理清一下处理思路
+
+bug1：
+epoll返回监听事件后，deallisten函数会根据listenEvent_&EPOLLET为条件进行while式accept。
+但是一开始判定条件我写成了listenEvent_&EPOLLIN
+外在表现：浏览器只有启动后第一次请求能被及时响应，webbench压测request数一直在20多一点
+原因应该是每次dolisten只能取一个连接，效率低下；同时全连接队列在大量请求下可能会填满导致大量http请求的tcp握手被丢弃
+
+bug2：
+timer逻辑处理里的adjust里的逻辑判定，else写在if的大括号里了
+外在表现：server运行后正常，有访问时会报错“核心已转储”，根据断言退出锁定了bug位置
+
+bug3：
+测试的sql用户没有连接的权限
+外在表现：所有登陆注册都失败，日志记录里在 init后有12行LOG_ERROR报错连接错误
+
+bug4:
+响应写的时候，没有加空行，content-length:xxx后只加了"\r\n"而不是"\r\n\r\n"
+外在表现：浏览器访问对应资源时一直卡在渲染前，并提示"IP 正在传输资源“
+原因应该是客户端收到的响应报文没有空行隔离响应头和响应体，所以表示资源的响应体始终为空，就一直在等待传输。这个排查非常
+艰难，因为没法再日志和报错里定位，仔细分析后菜发现这个...........
+
+
+之后介绍一下一个数据流是如何被处理的吧
+
+1，浏览器/客户端发送tcp三次握手，成功后listen创建的对应的全连接队列里有对应的socket对象，触发EPOLLIN的监听事件
+   epoll回调返回
+
+2，通过判定events数组里记录的这个event的data.fd来确认是否是监听事件。是则调用deallisten函数，循环accept全连接队
+   列里的socket直到返回-1，跳出循环。将对应socket分别加入webserver类的哈希表（文件描述符：HTTPCONN对象键值对），
+   加入定时器小根堆，加入epoll监听EPOLLIN事件并设置对应文件描述符是非阻塞。同时都成功写入INFO日志
+
+3，此时该socket的http报文发送到socket缓冲区队列，触发epoll回调。主线程的循环判定里通过非listenfd+event&EPOLLIN
+   判定这是读事件，调用dealread。dealread通过bind函数，绑定（处理函数onread，参数this指针和httpconn对象client），通过完美转发以右值形式
+   加入到线程池的任务队列。
+
+   这里简单介绍一下。我实现的线程池是一个函数对象队列。bind绑定完的回调加入这个队列处理是我认为modernc++比posix风格
+   最好用的地方。一开始我写posix风格的线程池，任务队列是httpconn对象，回调在线程池里写，调试和逻辑都不如现在简洁
+
+4，线程池的子线程执行onread函数。onread函数非常简单，直接调用httpconn对象的read函数，读小于0且不为EAGAIN说明读异常
+   ，关闭对应连接。之后调用onprocess函数
+   而httpconn的read函数也很简单，直接调用成员对象readbuff_的readfd函数并进行可能的错误处理
+   readbuff_是我封装的可自动增长缓冲区，底层是vector，依靠栈上空间分散读来避免缓冲区不足一次读完的问题，并实现自动扩容
+   ，read函数就是分散读并根据结果是否append，append会根据预留空间进行两种决策，即移动指针腾出空位/绝对空间不足扩容
+
+5，此时我们明确，http报文在httpconn对象的readbuff_里。然后是onprocess函数对其进行逻辑处理。
+   onprocess是webserver的成员函数，内容很简单，调用httpconn对象的process函数。
+
+   这里讲讲process函数和httpconn类。httpconn底层有readbuff_和writebuff_读写缓冲区，以及一个httprequest对象负责解析
+   报文，一个httpresponse负责生成响应报文。
+
+   process函数初始化httprequest函数，调用httprequest的parse函数处理readbuff_缓冲区。parse会根据请求行，请求头请求体逐次
+   解析，其中parsebody时会解析请求路径并记录，同时进行可能的身份验证实现登陆注册，数据存储在webserver数据库的user表。
+
+   parse最终返回一个bool值，根据bool值，httpconn对象会根据httprequest的部分数据（是否长连接？请求路径是？）来初始化
+   httpresponse对象。初始化后调用httpresponse的makeresponse函数，生成响应报文写入httpconn对象的写缓冲区。
+
+   注意，makeresponse只会生成响应报文头，响应报文体，其中的appendcontent函数其实只是打开了请求路径的文件，同时在响应
+   报文头添加content-length键值对，值是打开文件的struct stat的st_size。谨记，报文头最后一行写入writebuff_后记得在加
+   一空行"\r\n"
+
+   那么响应报文如何返回报文体呐？其实httpconn对象里有iovec对象，iovec[0]的base和length给writebuff_，iovec[1]
+   则对应打开文件的内存映射的起始地址和长度。（映射在parsebody里创建，并以char* mmfile记录起始地址）这就是报文体
+   的存储方式
+
+   如果一切顺利，process会返回true，这时候onprocess函数会注册EPOLLOUT事件等待写；否则返回false，代表信息读缓冲为空，
+   会注册EPOLLIN事件等待读
+
+   此时我们考虑一种特殊情况（其实也算不上特殊），那就是客户端的http报文完全正确但是不完整，怎么办？比如典型的post报文
+   会分两次发送。
+   火狐的post分一次发送，所以目前测试的源代码是按一次处理的
+   想处理不完全的情况可以再parse上做文章。不完全会导致readbuff_读完，但状态仍然不是FINISH，我们可以给httprequest类
+   添加一个bool成员对象is_finished，初始化为true。解析遇到上述情况就置其为false。httpresponse初始化前判断该值，如果
+   是false则响应状态码为100并生成响应报文。目前process函数每次都会初始化httprequest，我们可以加上判定，若is_finished
+   则不初始化，这样stat会保留上次解读的状态可以继续解析。而response再makeresponse中，如果状态码不为100就会回调置resquest
+   的is_finished为true，这样下次读事件解析会正确初始化httprequest
+
+6，此时报文解析完毕，同时生成了响应报文存储再httpconn对象的写缓冲区，可能打开的文件句柄的内容映射也被httpconn的
+   iovec[1]的iov_base指向
+   前面处理后已经注册了EPOLLOUT，等待写事件（ET下发送缓冲区非满会触发一次回调）
+   这时候主线程接收epollwait返回，调用dealwrite处理
+   dealwrite的内容很简单，通过bind将onwrite函数和this指针以及httpconn对象封装成函数对象，Addtask到线程池的任务队列
+   之后子线程执行onwrite函数
+   onwrite内容很简单，将iovec的内容集中写到httpconn存储的文件描述符里。writev可能有几种返回，等于0说明连接已经关闭
+   ，就关闭socket；小于0且错误码不等于EAGAIN，说明写出错，关闭socket；错误码EAGAIN，没写完，继续注册写事件；httpconn
+   对象写缓冲为可写为0，一切正常，注册读事件
+
+最后总结一下断开连接几种情况，监听到EPOLLRDHUP,EPOLLHUP和EPOLLERR，读/写异常，超时事件回调

@@ -71,6 +71,7 @@ void HttpResponse::MakeResponse(Buffer& buff){
     else if(code_==-1){
         code_=200;
     }
+    
     ErrorHtml_();
     AddStateLine_(buff);
     AddHeader_(buff);
@@ -133,7 +134,7 @@ void HttpResponse::AddContent_(Buffer& buff){
     }
     mmFile_=(char*)mmRet;
     close(srcFd);
-    buff.Append("Content-length: " +to_string(mmFileStat_.st_size)+"\r\n");
+    buff.Append("Content-length: " +to_string(mmFileStat_.st_size)+"\r\n\r\n");
 
 }
 
