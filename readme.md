@@ -1,4 +1,4 @@
-# sorano_webserver modern-c风格、轻量级、高性能、高并发的Web服务器
+# sorano_webserver modern-c++风格、轻量级、高性能、高并发的Web服务器
 ## Introduction
 C++实现的基于linux的轻量级服务器，webbench压测可支持上万并发量
 
